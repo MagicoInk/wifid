@@ -160,3 +160,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+
+# wifi-deauth: local capture / runtime artifacts (keep out of git)
+*.kismet
+*.kismet-journal
+.iface.tmp
+
+# Vendored external tool (has its own repo) — do not track here
+KawaiiDeauther/

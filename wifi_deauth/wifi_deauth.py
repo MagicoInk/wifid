@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import sys  # leave it
 import signal
 import logging
@@ -78,11 +79,11 @@ class Interceptor:
         self._custom_ssid_name: Union[str, None] = self.parse_custom_ssid_name(ssid_name)
         self.log_debug(f"Selected custom ssid name: {self._custom_ssid_name}")
         self._custom_bssid_addr: Union[str, None] = self.parse_custom_bssid_addr(bssid_addr)
-        self.log_debug(f"Selected custom bssid addr: {self._custom_ssid_name}")
+        self.log_debug(f"Selected custom bssid addr: {self._custom_bssid_addr}")
         self._custom_target_client_mac: Union[List[str], None] = self.parse_custom_client_mac(custom_client_macs)
         self.log_debug(f"Selected target client mac addrs: {self._custom_target_client_mac}")
         self._custom_target_ap_channels: List[int] = self.parse_custom_channels(custom_channels)
-        self.log_debug(f"Selected target client channels: {self._custom_target_client_mac}")
+        self.log_debug(f"Selected target client channels: {self._custom_target_ap_channels}")
 
         self._custom_target_ap_last_ch = 0  # to avoid overlapping
         self._midrun_output_buffer: List[str] = list()
@@ -118,8 +119,9 @@ class Interceptor:
 
     @staticmethod
     def verify_mac_addr(mac_addr: str) -> str:
-        RandMAC(mac_addr)
-        return mac_addr
+        if not re.fullmatch(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", mac_addr.strip()):
+            raise ValueError(f"Invalid MAC address -> {mac_addr}")
+        return mac_addr.strip()
 
     @staticmethod
     def parse_custom_client_mac(client_mac_addrs: Union[None, str]) -> List[str]:
@@ -127,7 +129,6 @@ class Interceptor:
         if client_mac_addrs is not None:
             for mac in client_mac_addrs.split(','):
                 try:
-                    custom_client_mac_list = list()
                     custom_client_mac_list.append(Interceptor.verify_mac_addr(mac))
                 except Exception as exc:
                     print_error(f"Invalid custom client mac address -> {mac}")
@@ -169,12 +170,13 @@ class Interceptor:
 
         # run these cmds regardless of debug mode
         sleep(2)  # give the interface some time to set up
-        iface_enabled = os.system(f"sudo ip link show {self.interface} | grep 'state DOWN' > /dev/null 2>&1")
-        mm_enabled = os.system(f"sudo iw {self.interface} info | grep 'type monitor' > /dev/null 2>&1")
-        self.log_debug(f"Interface is enabled -> {iface_enabled != 0}")
-        self.log_debug(f"Monitor mode is enabled -> {mm_enabled == 0}")
+        # grep returns 0 (os.system -> 0) only when the pattern is matched
+        iface_is_down = os.system(f"sudo ip link show {self.interface} | grep 'state DOWN' > /dev/null 2>&1") == 0
+        mm_is_on = os.system(f"sudo iw {self.interface} info | grep 'type monitor' > /dev/null 2>&1") == 0
+        self.log_debug(f"Interface is enabled -> {not iface_is_down}")
+        self.log_debug(f"Monitor mode is enabled -> {mm_is_on}")
 
-        return True
+        return mm_is_on and not iface_is_down
 
     @staticmethod
     def _kill_networkmanager():
@@ -214,7 +216,7 @@ class Interceptor:
             else:
                 self._clients_sniff_cb(pkt)  # pass forward to find potential clients
         except Exception as exc:
-            pass
+            self.log_debug(f"Exception in AP sniff callback -> {exc}")
 
     def _scan_channels_for_aps(self):
         channels_to_scan = self._get_channel_range()
@@ -269,7 +271,7 @@ class Interceptor:
                 pref = f"[{BOLD}{YELLOW}{str(ctr).rjust(3, ' ')}{RESET}] "
                 printf(f"{pref}{self._generate_ssid_str(ssid_obj.name, ssid_obj.channel, ssid_obj.mac_addr, preflen)}")
         if not target_map:
-            Interceptor.abort_run("Not APs were found, quitting...")
+            Interceptor.abort_run("No APs were found, quitting...")
 
         printf(DELIM)
 
@@ -309,8 +311,8 @@ class Interceptor:
                             self._midrun_output_buffer.append(f"Found new client {BOLD}{c_mac}{RESET},"
                                                               f" adding to target list -> "
                                                               f"{GREEN if add_to_target_list else RED}{add_to_target_list}{RESET}")
-        except:
-            pass
+        except Exception as exc:
+            self.log_debug(f"Exception in client sniff callback -> {exc}")
 
     def _print_midrun_output(self):
         bf_sz = len(self._midrun_output_buffer)
